@@ -1,0 +1,64 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Techem EnergyCoach",
+        "description": "Enter your Techem occupant portal credentials (energycoach.techem.be).",
+        "data": {
+          "username": "Email / Username",
+          "password": "Password"
+        }
+      },
+      "discovery": {
+        "title": "Discovered Meters & Setup Options",
+        "description": "Dwelling detected: {building_info}\n\nSelect the meters to track and setup options:",
+        "data": {
+          "enabled_meters": "Meters to monitor",
+          "auto_import": "Automatically import historical data upon setup",
+          "granularity": "Recent consumption granularity (15-day semi-monthly or monthly)",
+          "include_annual_history": "Include multi-year annual history (past annual statements)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the Techem portal.",
+      "invalid_auth": "Invalid username or password.",
+      "no_meters_selected": "You must select at least one meter.",
+      "unknown": "Unexpected error while connecting."
+    },
+    "abort": {
+      "already_configured": "This Techem account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Techem EnergyCoach Options",
+        "data": {
+          "enabled_meters": "Active meters",
+          "scan_interval": "Polling interval (seconds, 3600-86400)",
+          "include_annual_history": "Include multi-year annual history (past annual statements)",
+          "granularity": "Recent consumption granularity (15-day semi-monthly or monthly)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "eau_chaude": {
+        "name": "Hot Water"
+      },
+      "eau_froide": {
+        "name": "Cold Water"
+      },
+      "chauffage": {
+        "name": "Heating"
+      }
+    },
+    "button": {
+      "import_history": {
+        "name": "Import Historical Statistics (Energy Dashboard)"
+      }
+    }
+  }
+}

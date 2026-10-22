@@ -1,0 +1,64 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connexion à Techem EnergyCoach",
+        "description": "Indiquez les identifiants de votre compte occupant Techem (energycoach.techem.be).",
+        "data": {
+          "username": "Adresse E-mail / Identifiant",
+          "password": "Mot de passe"
+        }
+      },
+      "discovery": {
+        "title": "Compteurs découverts & Configuration",
+        "description": "Logement détecté : {building_info}\n\nSélectionnez les compteurs à suivre et les options d'historique :",
+        "data": {
+          "enabled_meters": "Compteurs à suivre",
+          "auto_import": "Importer automatiquement l'historique lors de l'installation",
+          "granularity": "Granularité de l'historique récent (bimensuelle 15j ou mensuelle)",
+          "include_annual_history": "Inclure l'historique annuel multi-années (anciens décomptes)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de contacter le portail Techem.",
+      "invalid_auth": "Identifiant ou mot de passe incorrect.",
+      "no_meters_selected": "Vous devez sélectionner au moins un compteur.",
+      "unknown": "Erreur inattendue lors de la connexion."
+    },
+    "abort": {
+      "already_configured": "Ce compte Techem est déjà configuré."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options Techem EnergyCoach",
+        "data": {
+          "enabled_meters": "Compteurs actifs",
+          "scan_interval": "Intervalle de relève (en secondes, max 86400s = 24h)",
+          "include_annual_history": "Inclure l'historique annuel multi-années (anciens décomptes)",
+          "granularity": "Granularité de l'historique récent (bimensuelle 15j ou mensuelle)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "eau_chaude": {
+        "name": "Eau Chaude"
+      },
+      "eau_froide": {
+        "name": "Eau Froide"
+      },
+      "chauffage": {
+        "name": "Chauffage"
+      }
+    },
+    "button": {
+      "import_history": {
+        "name": "Importer les statistiques historiques (Dashboard Énergie)"
+      }
+    }
+  }
+}

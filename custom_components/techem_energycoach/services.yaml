@@ -1,0 +1,3 @@
+import_history:
+  name: Import history
+  description: Manually trigger an import of Techem historical consumption into Home Assistant long-term statistics for the Energy Dashboard.
