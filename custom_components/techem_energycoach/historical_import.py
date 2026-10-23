@@ -212,5 +212,85 @@ async def async_import_techem_history(
         async_import_statistics(hass, metadata, stat_entries)  # type: ignore[arg-type]
         imported_counts[statistic_id] = len(stat_entries)
 
+        # Ensure short-term statistics and live sensor continuity:
+        # 1. Seed StatisticsShortTerm with the final historical record so that
+        # when Home Assistant's core sensor recorder starts compiling this sensor,
+        # it starts its cumulative sum from timeline[-1].sum instead of 0.0.
+        try:
+            from homeassistant.components.recorder import get_instance
+            from homeassistant.components.recorder.db_schema import StatisticsShortTerm
+
+            recorder_instance = get_instance(hass)
+            recorder_instance.async_import_statistics(
+                metadata,
+                [stat_entries[-1]],
+                StatisticsShortTerm,
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not seed short-term statistics for %s: %s", statistic_id, err)
+
+        # 2. Check if the live sensor already compiled any records with sum == 0.0
+        # (e.g. if the integration was already running before historical import was invoked).
+        # If so, automatically adjust those records to eliminate the drop/negative consumption.
+        try:
+            from homeassistant.components.recorder import get_instance
+            from homeassistant.components.recorder.statistics import statistics_during_period
+
+            recorder_instance = get_instance(hass)
+            final_cum_sum = (
+                stat_entries[-1]["sum"]
+                if isinstance(stat_entries[-1], dict)
+                else stat_entries[-1].sum
+            )
+            last_dt = (
+                stat_entries[-1]["start"]
+                if isinstance(stat_entries[-1], dict)
+                else stat_entries[-1].start
+            )
+
+            future_stats = await hass.async_add_executor_job(
+                statistics_during_period,
+                hass,
+                last_dt,
+                None,
+                {statistic_id},
+                "hour",
+                None,
+                {"sum"},
+            )
+            rows = future_stats.get(statistic_id, [])
+            drop_start = None
+            drop_sum = 0.0
+            for r in rows:
+                r_sum = r.get("sum")
+                if r_sum is not None and r_sum < final_cum_sum - 1e-4:
+                    drop_start = r.get("start")
+                    drop_sum = r_sum
+                    break
+
+            if drop_start is not None:
+                if isinstance(drop_start, (int, float)):
+                    dt_drop = datetime.fromtimestamp(drop_start, tz=timezone.utc)
+                else:
+                    dt_drop = drop_start
+                adj = round(final_cum_sum - drop_sum, 3) if is_water else round(final_cum_sum - drop_sum, 1)
+                _LOGGER.info(
+                    "Fixing statistical drop for %s at %s (sum=%s < %s): applying adjustment +%s %s",
+                    statistic_id,
+                    dt_drop,
+                    drop_sum,
+                    final_cum_sum,
+                    adj,
+                    unit,
+                )
+                recorder_instance.async_adjust_statistics(
+                    statistic_id,
+                    dt_drop,
+                    adj,
+                    unit,
+                )
+        except Exception as err:
+            _LOGGER.debug("Could not check/adjust statistical continuity for %s: %s", statistic_id, err)
+
     return imported_counts
 
