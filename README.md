@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="custom_components/techem_energycoach/brand/logo.png" alt="Techem EnergyCoach" width="280">
+  <img src="custom_components/techem_energycoach/brand/logo.png" alt="Techem EnergyCoach" width="360">
 </p>
 
 # Techem EnergyCoach (Belgique / Belgium) - Home Assistant Integration
