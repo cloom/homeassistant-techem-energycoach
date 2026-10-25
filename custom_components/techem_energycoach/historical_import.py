@@ -207,6 +207,18 @@ async def async_import_techem_history(
             for dt, delta, cum_sum in timeline
         ]
 
+        # Clear any prior long-term statistics for this sensor to eliminate legacy/corrupt records
+        try:
+            from homeassistant.components.recorder import get_instance
+
+            recorder_instance = get_instance(hass)
+            if hasattr(recorder_instance, "async_clear_statistics"):
+                recorder_instance.async_clear_statistics([statistic_id])
+        except Exception as err:
+            _LOGGER.debug(
+                "Could not clear prior statistics for %s: %s", statistic_id, err
+            )
+
         _LOGGER.info(
             "Importing %d historical statistics for %s",
             len(stat_entries),
