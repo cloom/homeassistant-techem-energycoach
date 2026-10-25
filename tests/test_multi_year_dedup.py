@@ -91,8 +91,8 @@ SAMPLE_ANNUAL_HISTORY = [
 ]
 
 
-def test_transition_year_deduplication_hot_water():
-    """Verify that transition year 2025 remainder is calculated without double counting."""
+def test_transition_year_no_extrapolation_hot_water():
+    """Verify that transition year 2025 contains only real measured entries without artificial remainder."""
     meter = MeterReading(
         meter_id="60828705",
         meter_type=METER_TYPE_HOT_WATER,
@@ -112,8 +112,7 @@ def test_transition_year_deduplication_hot_water():
     )
 
     # 2025 bimonthly sum = 2.0 + 1.6 + 2.7 + 1.6 = 7.9 m3
-    # 2025 annual statement = 25.202 m3
-    # remainder (Jan-Oct 2025) = 25.202 - 7.9 = 17.302 m3 placed at 2025-10-16
+    # ZERO extrapolation: no artificial remainder is injected into 2025!
 
     timeline = build_meter_statistics_timeline(
         m_type=METER_TYPE_HOT_WATER,
@@ -134,15 +133,54 @@ def test_transition_year_deduplication_hot_water():
     assert by_year[2022] == 22.285
     assert by_year[2023] == 22.001
     assert by_year[2024] == 24.932
-    # Exact match for 2025!
-    assert by_year[2025] == 25.202
+    # Only real bimonthly entries in 2025 (no artificial extrapolation remainder!)
+    assert by_year[2025] == 7.9
     # 2026 recent
     assert by_year[2026] == 2.0
 
-    # Verify remainder record timestamp and delta
-    remainder_entry = [entry for entry in timeline if entry[0] == datetime(2025, 10, 16, 0, 0, tzinfo=timezone.utc)]
-    assert len(remainder_entry) == 1
-    assert remainder_entry[0][1] == 17.302
+
+def test_certified_apartment_annual_history():
+    """Verify that apartment_annual_history uses certified annual figures directly without scaling."""
+    meter = MeterReading(
+        meter_id="60828705",
+        meter_type=METER_TYPE_HOT_WATER,
+        location="Indéfini",
+        current_month="2026/09",
+        current_value_raw=6.0,
+        current_value_m3_or_units=0.6,
+        exercise_total_raw=435.0,
+        exercise_total_m3_or_units=43.5,
+        monthly_consumption={"2026/01": 42.0},  # 4.2 m3 in 2026
+    )
+
+    apt_history = {
+        "eau_chaude": {
+            2021: 17.3,
+            2022: 13.1,
+            2023: 12.9,
+            2024: 21.2,
+            2025: 29.7,
+        }
+    }
+
+    timeline = build_meter_statistics_timeline(
+        m_type=METER_TYPE_HOT_WATER,
+        meter=meter,
+        apartment_annual_history=apt_history,
+        include_annual_history=True,
+        granularity=GRANULARITY_MONTHLY,
+    )
+
+    by_year: dict[int, float] = {}
+    for dt, delta, cum_sum in timeline:
+        by_year[dt.year] = round(by_year.get(dt.year, 0.0) + delta, 3)
+
+    assert by_year[2021] == 17.3
+    assert by_year[2022] == 13.1
+    assert by_year[2023] == 12.9
+    assert by_year[2024] == 21.2
+    assert by_year[2025] == 29.7
+    assert by_year[2026] == 4.2
 
 
 def test_monotonic_cumulative_sums():

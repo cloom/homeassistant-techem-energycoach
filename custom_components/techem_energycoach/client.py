@@ -62,6 +62,7 @@ class TechemData:
     building_info: str
     meters: dict[str, MeterReading] = field(default_factory=dict)
     annual_history: list[dict[str, Any]] = field(default_factory=list)
+    apartment_annual_history: dict[str, dict[int, float]] = field(default_factory=dict)
 
 
 class TechemEnergyCoachClient:
@@ -83,6 +84,7 @@ class TechemEnergyCoachClient:
             "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
         })
         self._post_action: str | None = None
+        self._post_login_html: str | None = None
 
     def login(self) -> str:
         """Authenticate against Techem portal and return post-login HTML."""
@@ -130,6 +132,7 @@ class TechemEnergyCoachClient:
 
             action2 = form2.get("action")
             self._post_action = BASE_URL + action2 if action2.startswith("/") else action2
+            self._post_login_html = r2.text
             return r2.text
 
         except requests.RequestException as err:
@@ -143,7 +146,7 @@ class TechemEnergyCoachClient:
         assert self._post_action is not None
 
         try:
-            # POST to select M43=2 (Totaux mensuels)
+            # 1. Sequential POST to select M43=2 (Totaux mensuels)
             mensuel_data = {
                 "WD_JSON_PROPRIETE_": '{"m_oProprietesSecurisees":{}}',
                 "WD_BUTTON_CLICK_": "M43",
@@ -156,9 +159,35 @@ class TechemEnergyCoachClient:
                     f"Failed to fetch monthly totals: HTTP {resp.status_code}"
                 )
 
+            # Update post_action to latest form action from monthly view
+            soup_m = BeautifulSoup(resp.text, "html.parser")
+            form_m = soup_m.find("form")
+            if form_m and form_m.get("action"):
+                act_m = form_m.get("action")
+                self._post_action = BASE_URL + act_m if act_m.startswith("/") else act_m
+
             data = self._parse_monthly_page(resp.text)
 
-            # Also fetch bimonthly (15-day) consumption if available
+            # Extract certified occupant apartment annual statements from post-login HTML
+            if self._post_login_html:
+                data.apartment_annual_history = self._parse_apartment_annual_history(
+                    self._post_login_html
+                )
+                for y in sorted({
+                    y
+                    for m_dict in data.apartment_annual_history.values()
+                    for y in m_dict.keys()
+                }):
+                    data.annual_history.append({
+                        "date": f"31/12/{y}",
+                        "type": "Relevé rép & eau",
+                        "eau_chaude": str(data.apartment_annual_history.get("eau_chaude", {}).get(y, 0.0)),
+                        "eau_froide": str(data.apartment_annual_history.get("eau_froide", {}).get(y, 0.0)),
+                        "chauffage": str(data.apartment_annual_history.get("chauffage", {}).get(y, 0.0)),
+                        "repartiteur": "0",
+                    })
+
+            # 2. Sequential POST to select M43=3 (bimonthly 15-day) if available
             try:
                 bimonthly_results = self._fetch_bimonthly_data()
                 for m_type, bimonthly_vals in bimonthly_results.items():
@@ -171,6 +200,99 @@ class TechemEnergyCoachClient:
 
         except requests.RequestException as err:
             raise TechemConnectionError(f"Error fetching Techem data: {err}") from err
+
+
+    def _parse_apartment_annual_history(self, html: str) -> dict[str, dict[int, float]]:
+        """Extract certified annual statements for occupant apartment from login/comparaison page."""
+        results: dict[str, dict[int, float]] = {
+            "eau_chaude": {},
+            "eau_froide": {},
+            "chauffage": {},
+            "repartiteur": {},
+        }
+        soup = BeautifulSoup(html, "html.parser")
+
+        # 1. Parse table#A8 (Eau chaude in hL -> 0.1 m3) and table#A16 (Eau froide in hL -> 0.1 m3)
+        def parse_table_hl(tbl_id: str) -> dict[int, float]:
+            res: dict[int, float] = {}
+            # In WebDev 26, rows have id="A8_1", "A8_2" or table has id="ctzA8" / "A8"
+            rows = soup.find_all("tr", id=re.compile(rf"^{tbl_id}_\d+"))
+            if not rows:
+                tbl = soup.find(id=re.compile(rf"(^|ctz){tbl_id}$"))
+                if tbl:
+                    rows = tbl.find_all("tr")
+            for tr in rows:
+                tds = tr.find_all("td")
+                if len(tds) >= 2:
+                    yr_str = re.sub(r"[^\d]", "", tds[0].get_text())
+                    val_str = re.sub(r"[^\d.]", "", tds[1].get_text().replace(",", "."))
+                    if yr_str and val_str:
+                        try:
+                            y = int(yr_str)
+                            v = float(val_str)
+                            if v > 0:
+                                res[y] = round(v * 0.1, 3)
+                        except ValueError:
+                            pass
+            return res
+
+        results["eau_chaude"] = parse_table_hl("A8")
+        results["eau_froide"] = parse_table_hl("A16")
+
+        # 2. Parse heating (A19) and any other meters from SVG chart desc if present
+        for m in re.finditer(r'<desc id=\"(A\d+)-desc-0\">(.*?)</desc>', html):
+            cid, content = m.groups()
+            parsed: dict[int, float] = {}
+            for ym in re.finditer(r"(\d{4})\s*=\s*([\d.]+)", content):
+                y, val = int(ym.group(1)), float(ym.group(2))
+                if val > 0:
+                    parsed[y] = val
+            if cid == "A12" and parsed:
+                results["eau_chaude"] = {y: round(v * 0.1, 3) for y, v in parsed.items()}
+            elif cid == "A13" and parsed:
+                results["eau_froide"] = {y: round(v * 0.1, 3) for y, v in parsed.items()}
+            elif cid == "A19" and parsed:
+                results["chauffage"] = parsed
+            elif cid == "A10" and parsed:
+                results["repartiteur"] = parsed
+
+        # 3. Parse from DeclareChamp calls if not already populated
+        # A12 = Eau chaude (hL -> 0.1 m3), A13 = Eau froide (hL -> 0.1 m3),
+        # A19 = Chauffage (unités), A10 = Répartiteur (unités)
+        dc_mapping = [
+            ("A12", "eau_chaude", 0.1),
+            ("A13", "eau_froide", 0.1),
+            ("A19", "chauffage", 1.0),
+            ("A10", "repartiteur", 1.0),
+        ]
+        for cid, meter_key, scale in dc_mapping:
+            if not results[meter_key]:
+                m = re.search(
+                    rf'DeclareChamp\(\"{cid}\".*?\"m_tabValeur\":\s*\[([^\]]*)\]',
+                    html,
+                    re.DOTALL,
+                )
+                if m:
+                    val_str = m.group(1)
+                    pos = m.end()
+                    m_cat = re.search(
+                        r'\"m_tabValeur\":\s*\[([^\]]*)\]', html[pos : pos + 1500]
+                    )
+                    if m_cat:
+                        cat_str = m_cat.group(1)
+                        vals = [
+                            float(x.strip()) for x in val_str.split(",") if x.strip()
+                        ]
+                        cats = [
+                            re.sub(r"[^\d]", "", c)
+                            for c in cat_str.split(",")
+                            if re.sub(r"[^\d]", "", c)
+                        ]
+                        for c_yr, v in zip(cats, vals):
+                            if c_yr and v > 0:
+                                results[meter_key][int(c_yr)] = round(v * scale, 3)
+
+        return results
 
 
     def _parse_monthly_page(self, html: str) -> TechemData:
@@ -231,58 +353,50 @@ class TechemEnergyCoachClient:
             rows = [[c.text for c in r.findall("./COLONNE")] for r in root.findall("./LIGNES/LIGNE")]
 
             if idx == 0:
-                # Annual history
-                for r in rows:
-                    if len(r) >= 13 and r[2]:
-                        data.annual_history.append({
-                            "date": r[2].strip() if r[2] else "",
-                            "type": r[4].strip() if r[4] else "",
-                            "repartiteur": r[9].strip() if r[9] else "0",
-                            "eau_chaude": r[10].strip().replace("\xa0", "").replace(" ", "") if r[10] else "0",
-                            "eau_froide": r[11].strip().replace("\xa0", "").replace(" ", "") if r[11] else "0",
-                            "chauffage": r[12].strip().replace("\xa0", "").replace(" ", "") if r[12] else "0",
-                        })
-            else:
-                m_type = block_types[meter_block_idx] if meter_block_idx < len(block_types) else f"meter_{meter_block_idx}"
-                meter_block_idx += 1
+                # Block 0 is HISINDEX (building-wide co-ownership totals), NOT individual occupant history.
+                # Building totals must NOT be imported into occupant individual statistics.
+                continue
 
-                for r in rows:
-                    if len(r) >= 3 and r[0] and r[0].isdigit():
-                        meter_id = r[0]
-                        location = r[1] or "Indéfini"
-                        months = titles[2:len(r)]
-                        monthly_vals: dict[str, float] = {}
+            m_type = block_types[meter_block_idx] if meter_block_idx < len(block_types) else f"meter_{meter_block_idx}"
+            meter_block_idx += 1
 
-                        for m_title, val_str in zip(months, r[2:]):
-                            if m_title and val_str is not None:
-                                try:
-                                    monthly_vals[m_title] = float(
-                                        val_str.replace(",", ".").replace(" ", "")
-                                    )
-                                except ValueError:
-                                    pass
+            for r in rows:
+                if len(r) >= 3 and r[0] and r[0].isdigit():
+                    meter_id = r[0]
+                    location = r[1] or "Indéfini"
+                    months = titles[2:len(r)]
+                    monthly_vals: dict[str, float] = {}
 
-                        latest_month = months[-1] if months else ""
-                        latest_raw = monthly_vals.get(latest_month, 0.0)
-                        exercise_total_raw = sum(monthly_vals.values())
+                    for m_title, val_str in zip(months, r[2:]):
+                        if m_title and val_str is not None:
+                            try:
+                                monthly_vals[m_title] = float(
+                                    val_str.replace(",", ".").replace(" ", "")
+                                )
+                            except ValueError:
+                                pass
 
-                        # For water: convert hL (hectoliters) to m3 (1 hL = 0.1 m3)
-                        # For heat: keep raw units
-                        is_water = "eau" in m_type
-                        latest_converted = latest_raw * 0.1 if is_water else latest_raw
-                        total_converted = exercise_total_raw * 0.1 if is_water else exercise_total_raw
+                    latest_month = months[-1] if months else ""
+                    latest_raw = monthly_vals.get(latest_month, 0.0)
+                    exercise_total_raw = sum(monthly_vals.values())
 
-                        data.meters[m_type] = MeterReading(
-                            meter_id=meter_id,
-                            meter_type=m_type,
-                            location=location,
-                            current_month=latest_month,
-                            current_value_raw=latest_raw,
-                            current_value_m3_or_units=round(latest_converted, 3),
-                            exercise_total_raw=exercise_total_raw,
-                            exercise_total_m3_or_units=round(total_converted, 3),
-                            monthly_consumption=monthly_vals,
-                        )
+                    # For water: convert hL (hectoliters) to m3 (1 hL = 0.1 m3)
+                    # For heat: keep raw units
+                    is_water = "eau" in m_type
+                    latest_converted = latest_raw * 0.1 if is_water else latest_raw
+                    total_converted = exercise_total_raw * 0.1 if is_water else exercise_total_raw
+
+                    data.meters[m_type] = MeterReading(
+                        meter_id=meter_id,
+                        meter_type=m_type,
+                        location=location,
+                        current_month=latest_month,
+                        current_value_raw=latest_raw,
+                        current_value_m3_or_units=round(latest_converted, 3),
+                        exercise_total_raw=exercise_total_raw,
+                        exercise_total_m3_or_units=round(total_converted, 3),
+                        monthly_consumption=monthly_vals,
+                    )
 
         return data
 

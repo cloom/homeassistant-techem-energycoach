@@ -87,3 +87,53 @@ def test_auth_failure():
     client = TechemEnergyCoachClient("bad_user@example.com", "wrong_password")
     with pytest.raises(TechemAuthError):
         client.login()
+
+
+def test_parse_apartment_annual_history_html():
+    """Verify parsing of real apartment annual tables (A8, A16, A19)."""
+    sample_post_login_html = """
+    <html>
+      <body>
+        <table id="A8">
+          <tr><td> 2024</td><td>212</td></tr>
+          <tr><td> 2025</td><td>297</td></tr>
+        </table>
+        <table id="A16">
+          <tr><td> 2024</td><td>288</td></tr>
+          <tr><td> 2025</td><td>341</td></tr>
+        </table>
+        <script>
+          clWDUtil.DeclareChamp("A19", void 0, void 0, void 0, WDGraphe, [
+            {"m_tabValeur": [1745, 1940, 0]},
+            {"m_tabValeur": [" 2024", " 2025", " 2026"]}
+          ]);
+        </script>
+      </body>
+    </html>
+    """
+    client = TechemEnergyCoachClient("user", "pass")
+    history = client._parse_apartment_annual_history(sample_post_login_html)
+
+    assert history["eau_chaude"] == {2024: 21.2, 2025: 29.7}
+    assert history["eau_froide"] == {2024: 28.8, 2025: 34.1}
+    assert history["chauffage"] == {2024: 1745.0, 2025: 1940.0}
+
+
+def test_parse_apartment_annual_history_svg():
+    """Verify parsing when SVG desc elements are present."""
+    sample_svg_html = """
+    <html>
+      <body>
+        <desc id="A12-desc-0">Total 2021=173 2022=131 2023=129</desc>
+        <desc id="A13-desc-0">Total 2021=218 2022=184 2023=178</desc>
+        <desc id="A19-desc-0">Total 2021=3009 2022=1551 2023=841</desc>
+      </body>
+    </html>
+    """
+    client = TechemEnergyCoachClient("user", "pass")
+    history = client._parse_apartment_annual_history(sample_svg_html)
+
+    assert history["eau_chaude"] == {2021: 17.3, 2022: 13.1, 2023: 12.9}
+    assert history["eau_froide"] == {2021: 21.8, 2022: 18.4, 2023: 17.8}
+    assert history["chauffage"] == {2021: 3009.0, 2022: 1551.0, 2023: 841.0}
+

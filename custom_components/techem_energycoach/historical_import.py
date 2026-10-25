@@ -25,17 +25,18 @@ _LOGGER = logging.getLogger(__name__)
 def build_meter_statistics_timeline(
     m_type: str,
     meter: MeterReading,
+    apartment_annual_history: dict[str, dict[int, float]] | None = None,
     annual_history: list[dict[str, Any]] | None = None,
     include_annual_history: bool = True,
     granularity: str = GRANULARITY_BIMONTHLY,
 ) -> list[tuple[datetime, float, float]]:
     """Build chronological statistics entries (start_dt, delta, cumulative_sum).
 
-    Handles bimonthly/monthly granularity and multi-year annual statement de-duplication.
+    Handles bimonthly/monthly granularity and multi-year certified annual statements.
+    Ensures zero extrapolation: no artificial transition year remainders are generated.
     """
     is_water = m_type in (METER_TYPE_HOT_WATER, METER_TYPE_COLD_WATER)
     factor = 0.1 if is_water else 1.0
-    annual_factor = 0.001 if is_water else 1.0
 
     recent_entries: list[tuple[datetime, float]] = []
     covered_months: set[tuple[int, int]] = set()
@@ -77,51 +78,52 @@ def build_meter_statistics_timeline(
     earliest_recent_dt = recent_entries[0][0] if recent_entries else None
     transition_year = earliest_recent_dt.year if earliest_recent_dt else None
 
-    # 2. Multi-year annual statements from HISINDEX
+    # 2. Multi-year certified annual statements from occupant apartment décomptes
     annual_by_year: dict[int, float] = {}
-    if include_annual_history and annual_history:
-        for row in annual_history:
-            d_str = row.get("date", "")
-            if not re.match(r"^\d{2}/\d{2}/\d{4}$", d_str):
-                continue
-            try:
-                y = int(d_str.split("/")[2])
-            except ValueError:
-                continue
-            val_str = row.get(m_type, "0")
-            clean_v = re.sub(r"[^\d.]", "", str(val_str).replace(",", "."))
-            try:
-                val_f = float(clean_v) * annual_factor
-                if val_f > 0 and y not in annual_by_year:
-                    annual_by_year[y] = round(val_f, 3) if is_water else round(val_f, 1)
-            except ValueError:
-                continue
+    if include_annual_history:
+        if apartment_annual_history and m_type in apartment_annual_history:
+            annual_by_year = {
+                y: round(v, 3) if is_water else round(v, 1)
+                for y, v in apartment_annual_history[m_type].items()
+                if v > 0
+            }
+        elif annual_history:
+            # Fallback for mock data / test suites
+            for row in annual_history:
+                d_str = row.get("date", "")
+                if not re.match(r"^\d{2}/\d{2}/\d{4}$", d_str):
+                    continue
+                try:
+                    y = int(d_str.split("/")[2])
+                except ValueError:
+                    continue
+                val_str = row.get(m_type, "0")
+                clean_v = re.sub(r"[^\d.]", "", str(val_str).replace(",", "."))
+                try:
+                    val_f = float(clean_v)
+                    # If legacy litrage format (> 500 for water), convert to m3
+                    if is_water and val_f > 500:
+                        val_f *= 0.001
+                    if val_f > 0 and y not in annual_by_year:
+                        annual_by_year[y] = round(val_f, 3) if is_water else round(val_f, 1)
+                except ValueError:
+                    continue
 
     full_entries: list[tuple[datetime, float]] = []
     if transition_year:
-        # A. Past years before transition year
+        # Closed past years strictly before transition year (at Dec 31st 23:00 UTC)
         for y, val in sorted(annual_by_year.items()):
             if y < transition_year:
-                dt = datetime(y, 12, 1, 0, 0, tzinfo=timezone.utc)
+                dt = datetime(y, 12, 31, 23, 0, tzinfo=timezone.utc)
                 full_entries.append((dt, val))
 
-        # B. Transition year remainder (Jan-Oct before rolling window)
-        if transition_year in annual_by_year:
-            annual_val = annual_by_year[transition_year]
-            recent_transition_sum = sum(
-                v for dt, v in recent_entries if dt.year == transition_year
-            )
-            rem = round(annual_val - recent_transition_sum, 3) if is_water else round(annual_val - recent_transition_sum, 1)
-            if rem > 0:
-                if earliest_recent_dt.day == 1:
-                    prev_month = earliest_recent_dt.replace(day=1) - timedelta(days=1)
-                    rem_dt = prev_month.replace(day=16, hour=0, minute=0, second=0, microsecond=0)
-                else:
-                    rem_dt = earliest_recent_dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                full_entries.append((rem_dt, rem))
+        # ZERO EXTRAPOLATION:
+        # We do NOT compute any estimated remainder for the transition year.
+        # The transition year and ongoing periods are strictly covered by their
+        # authentic, measured meter readings (recent_entries).
     elif annual_by_year:
         for y, val in sorted(annual_by_year.items()):
-            dt = datetime(y, 12, 1, 0, 0, tzinfo=timezone.utc)
+            dt = datetime(y, 12, 31, 23, 0, tzinfo=timezone.utc)
             full_entries.append((dt, val))
 
     full_entries.extend(recent_entries)
@@ -174,6 +176,7 @@ async def async_import_techem_history(
         timeline = build_meter_statistics_timeline(
             m_type=m_type,
             meter=meter,
+            apartment_annual_history=getattr(data, "apartment_annual_history", None),
             annual_history=data.annual_history,
             include_annual_history=include_annual_history,
             granularity=granularity,
