@@ -65,8 +65,8 @@ def test_button_attributes_and_defaults():
 
     button = TechemImportHistoryButton(coordinator, entry)
 
-    # Check that button is disabled by default and categorized as CONFIG
-    assert button._attr_entity_registry_enabled_default is False
+    # Check that button is enabled by default and categorized as CONFIG
+    assert button._attr_entity_registry_enabled_default is True
     assert button._attr_entity_category == EntityCategory.CONFIG
 
     # Check initial extra_state_attributes (bilingual)

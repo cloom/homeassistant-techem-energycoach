@@ -85,7 +85,26 @@ def test_parse_sample_html():
 def test_auth_failure():
     """Verify that bad credentials raise TechemAuthError."""
     client = TechemEnergyCoachClient("bad_user@example.com", "wrong_password")
+    client.session.get = MagicMock(return_value=MagicMock(
+        status_code=200,
+        text='<form action="/login_step2"></form>'
+    ))
+    client.session.post = MagicMock(return_value=MagicMock(
+        status_code=200,
+        text='<html><body>Nom d\'utilisateur ou mot de passe invalide</body></html>'
+    ))
     with pytest.raises(TechemAuthError):
+        client.login()
+
+
+def test_server_outage():
+    """Verify that portal server error / END_PAGE raises TechemConnectionError."""
+    client = TechemEnergyCoachClient("user@example.com", "password")
+    client.session.get = MagicMock(return_value=MagicMock(
+        status_code=200,
+        text='<html><title>END_PAGE</title><form action="/WEBENERGY_OCCUPANTS/END_PAGE/123"></form>Impossible to Connect On Server Data!</html>'
+    ))
+    with pytest.raises(TechemConnectionError):
         client.login()
 
 

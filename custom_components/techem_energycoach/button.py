@@ -46,7 +46,7 @@ class TechemImportHistoryButton(CoordinatorEntity[TechemCoordinator], ButtonEnti
     _attr_name = "Importer les statistiques historiques"
     _attr_icon = "mdi:database-import"
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_entity_registry_enabled_default = False
+    _attr_entity_registry_enabled_default = True
 
     def __init__(self, coordinator: TechemCoordinator, entry: ConfigEntry) -> None:
         """Initialize button."""

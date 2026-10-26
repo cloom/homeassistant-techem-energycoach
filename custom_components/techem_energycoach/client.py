@@ -101,7 +101,12 @@ class TechemEnergyCoachClient:
             if not form1 or not form1.get("action"):
                 raise TechemParseError("Login form not found")
 
-            action1 = form1.get("action")
+            action1 = form1.get("action", "")
+            if "END_PAGE" in r1.text or "Impossible to Connect" in r1.text or "END_PAGE" in action1:
+                raise TechemConnectionError(
+                    "Techem portal server is temporarily unavailable (reported 'Impossible to Connect On Server Data')"
+                )
+
             post_url = BASE_URL + action1 if action1.startswith("/") else action1
 
             # 2. POST credentials
@@ -125,12 +130,22 @@ class TechemEnergyCoachClient:
             if "invalide" in r2.text.lower() and "mot de passe" in r2.text.lower():
                 raise TechemAuthError("Invalid Techem username or password!")
 
+            if "END_PAGE" in r2.text or "Impossible to Connect" in r2.text:
+                raise TechemConnectionError(
+                    "Techem portal session terminated unexpectedly (END_PAGE: 'Impossible to Connect On Server Data')"
+                )
+
             soup2 = BeautifulSoup(r2.text, "html.parser")
             form2 = soup2.find("form")
             if not form2:
                 raise TechemParseError("Post-login page not found")
 
-            action2 = form2.get("action")
+            action2 = form2.get("action", "")
+            if "END_PAGE" in action2:
+                raise TechemConnectionError(
+                    "Techem portal redirected to END_PAGE after credentials submission"
+                )
+
             self._post_action = BASE_URL + action2 if action2.startswith("/") else action2
             self._post_login_html = r2.text
             return r2.text
@@ -319,6 +334,13 @@ class TechemEnergyCoachClient:
             html,
             re.DOTALL,
         )
+
+        if not raw_blocks:
+            if "END_PAGE" in html or "Impossible to Connect" in html:
+                raise TechemConnectionError(
+                    "Techem portal session expired or server error encountered during data fetch"
+                )
+            raise TechemParseError("No meter data tables found in Techem monthly response")
 
         # In Techem EnergyCoach WebDev 26:
         # Block 0: Annual history table
