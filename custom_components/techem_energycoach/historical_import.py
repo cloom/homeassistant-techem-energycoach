@@ -214,6 +214,11 @@ async def async_import_techem_history(
             recorder_instance = get_instance(hass)
             if hasattr(recorder_instance, "async_clear_statistics"):
                 recorder_instance.async_clear_statistics([statistic_id])
+            else:
+                from homeassistant.components.recorder.statistics import clear_statistics
+                recorder_instance.async_add_executor_job(
+                    clear_statistics, recorder_instance, [statistic_id]
+                )
         except Exception as err:
             _LOGGER.debug(
                 "Could not clear prior statistics for %s: %s", statistic_id, err

@@ -78,10 +78,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
     }
 
-    # Handle automatic initial import if requested during setup
-    if entry.data.get("initial_import_pending", False):
+    # Handle automatic initial import for new setup or one-time upgrade migration
+    if entry.data.get("initial_import_pending", False) or not entry.data.get("v1_clean_import_done", False):
         new_data = dict(entry.data)
         new_data["initial_import_pending"] = False
+        new_data["v1_clean_import_done"] = True
         hass.config_entries.async_update_entry(entry, data=new_data)
 
         async def _run_initial_auto_import() -> None:
