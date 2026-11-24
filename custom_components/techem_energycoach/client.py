@@ -74,6 +74,13 @@ class TechemEnergyCoachClient:
         self.password = password
         self.timeout = timeout
         self.session = requests.Session()
+        self._init_session()
+        self._post_action: str | None = None
+        self._post_login_html: str | None = None
+
+    def _init_session(self) -> None:
+        """Initialize requests session with standard headers."""
+        self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -83,8 +90,6 @@ class TechemEnergyCoachClient:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
         })
-        self._post_action: str | None = None
-        self._post_login_html: str | None = None
 
     def login(self) -> str:
         """Authenticate against Techem portal and return post-login HTML."""
@@ -155,9 +160,18 @@ class TechemEnergyCoachClient:
 
     def fetch_data(self) -> TechemData:
         """Fetch monthly totals and parse all meter consumption datasets."""
-        if not self._post_action:
-            self.login()
+        # Always re-authenticate for every poll cycle because Techem WebDev 26
+        # sessions expire after ~20 minutes of inactivity. Reusing a stale session
+        # causes daily coordinator updates to fail until Home Assistant is restarted.
+        self._post_action = None
+        self._post_login_html = None
+        try:
+            self.session.close()
+        except Exception:
+            pass
+        self._init_session()
 
+        self.login()
         assert self._post_action is not None
 
         try:
@@ -214,7 +228,11 @@ class TechemEnergyCoachClient:
             return data
 
         except requests.RequestException as err:
+            self._post_action = None
             raise TechemConnectionError(f"Error fetching Techem data: {err}") from err
+        except Exception:
+            self._post_action = None
+            raise
 
 
     def _parse_apartment_annual_history(self, html: str) -> dict[str, dict[int, float]]:

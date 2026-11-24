@@ -156,3 +156,39 @@ def test_parse_apartment_annual_history_svg():
     assert history["eau_froide"] == {2021: 21.8, 2022: 18.4, 2023: 17.8}
     assert history["chauffage"] == {2021: 3009.0, 2022: 1551.0, 2023: 841.0}
 
+
+def test_fetch_data_always_relogins():
+    """Verify that fetch_data always initiates a fresh login even across subsequent calls."""
+    from unittest.mock import patch
+
+    mock_sess = MagicMock()
+    mock_sess.post.return_value = MagicMock(
+        status_code=200,
+        text="<form action='/next_action'></form>"
+    )
+
+    with patch("requests.Session", return_value=mock_sess):
+        client = TechemEnergyCoachClient("user@example.com", "password")
+
+        login_call_count = 0
+        def mock_login():
+            nonlocal login_call_count
+            login_call_count += 1
+            client._post_action = f"https://energycoach.techem.be/action_{login_call_count}"
+            return "<html>post login</html>"
+
+        client.login = MagicMock(side_effect=mock_login)
+        client._parse_monthly_page = MagicMock(return_value=TechemData(building_info="Test Building"))
+        client._fetch_bimonthly_data = MagicMock(return_value={})
+
+        # First fetch
+        data1 = client.fetch_data()
+        assert login_call_count == 1
+        assert data1.building_info == "Test Building"
+
+        # Second fetch (e.g. 24h later coordinator poll)
+        data2 = client.fetch_data()
+        assert login_call_count == 2
+        assert data2.building_info == "Test Building"
+
+
